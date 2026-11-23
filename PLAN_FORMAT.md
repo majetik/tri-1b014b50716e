@@ -24,10 +24,10 @@ The app reads that file each time it loads. Changing the plan needs no code chan
 ```json
 {
   "rampStart": "2026-11-23",
-  "planStart": "2026-12-07",
+  "planStart": "2026-12-14",
   "weeks": [
     {
-      "weekOf": "2026-12-07",
+      "weekOf": "2026-12-14",
       "phase": "Base",
       "swim": 1.5,
       "bike": 2.5,

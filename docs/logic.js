@@ -1,5 +1,5 @@
 export const RACE = '2027-10-17';
-export const DEFAULT_PLAN = { rampStart: '2026-11-23', planStart: '2026-12-07', weeks: [] };
+export const DEFAULT_PLAN = { rampStart: '2026-11-23', planStart: '2026-12-14', weeks: [] };
 
 // Fallback weekly hours, used for any week docs/plan.json does not define.
 export const SPORTS = {

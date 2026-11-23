@@ -77,7 +77,7 @@ test('ramp-up never reports behind, and old training does not count against the 
   const p = progress([session('running', '2026-11-16', 0.2)], '2026-11-23');
   assert.equal(p.status, 'ramp');
   assert.equal(p.phase, 'Ramp-up');
-  assert.equal(progress([session('running', '2026-11-30', 0.2)], '2026-12-07').status, 'start');
+  assert.equal(progress([session('running', '2026-12-07', 0.2)], '2026-12-14').status, 'start');
 });
 
 test('strength, climbing, and other training stay out of swim, bike, and run totals', () => {
