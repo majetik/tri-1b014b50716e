@@ -1,13 +1,16 @@
 export const RACE = '2027-10-17';
-export const PLAN_START = '2026-11-23';
+export const DEFAULT_PLAN = { rampStart: '2026-11-23', planStart: '2026-12-07', weeks: [] };
 
-// Weekly hours for a finish-focused 70.3 plan. Edit these to change the whole ramp.
+// Fallback weekly hours, used for any week docs/plan.json does not define.
 export const SPORTS = {
   swim: { label: 'Swim', start: 1, peak: 2.5, longShare: 0.4, long: 'Long swim', easy: 'Technique swim' },
   bike: { label: 'Bike', start: 2, peak: 6, longShare: 0.5, long: 'Long ride', easy: 'Easy ride' },
   run: { label: 'Run', start: 1.25, peak: 3.25, longShare: 0.5, long: 'Long run', easy: 'Easy run' },
 };
+export const SUPPORT = { strength: 'Strength', climbing: 'Climbing', other: 'Other' };
 const SPORT_KEYS = Object.keys(SPORTS);
+const SESSION_KINDS = [...SPORT_KEYS, 'strength', 'climbing', 'other'];
+const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const DAY = 86400000;
 const toMs = (d) => Date.parse(`${d}T00:00:00Z`);
 
@@ -15,6 +18,48 @@ export const addDays = (d, n) => new Date(toMs(d) + n * DAY).toISOString().slice
 export const mondayOf = (d) => addDays(d, -((new Date(toMs(d)).getUTCDay() + 6) % 7));
 export const weeksOut = (monday) => Math.round((toMs(mondayOf(RACE)) - toMs(monday)) / (7 * DAY));
 export const daysToRace = (today) => Math.round((toMs(RACE) - toMs(today)) / DAY);
+
+let activePlan = DEFAULT_PLAN;
+export const getPlan = () => activePlan;
+export const setPlan = (plan) => { activePlan = plan; };
+const weekPlan = (monday) => activePlan.weeks.find((w) => w.weekOf === monday);
+const mondayAt = (w) => addDays(mondayOf(RACE), -7 * w);
+
+const isDate = (d) => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)
+  && !Number.isNaN(toMs(d)) && new Date(toMs(d)).toISOString().startsWith(d);
+
+// plan.json is edited by hand or by another tool, so reject anything malformed.
+export function parsePlan(raw) {
+  const fail = (msg) => { throw new Error(msg); };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('plan must be an object');
+  if (!isDate(raw.planStart)) fail('planStart must be a YYYY-MM-DD date');
+  const rampStart = raw.rampStart ?? raw.planStart;
+  if (!isDate(rampStart)) fail('rampStart must be a YYYY-MM-DD date');
+  if (rampStart > raw.planStart) fail('rampStart must not be after planStart');
+  if (raw.planStart > RACE) fail('planStart must be before the race');
+  if (!Array.isArray(raw.weeks ?? [])) fail('weeks must be a list');
+
+  const seen = new Set();
+  const weeks = (raw.weeks ?? []).map((w) => {
+    if (!isDate(w?.weekOf) || mondayOf(w.weekOf) !== w.weekOf) fail(`weekOf ${w?.weekOf} must be a Monday`);
+    if (seen.has(w.weekOf)) fail(`week ${w.weekOf} appears twice`);
+    seen.add(w.weekOf);
+    for (const s of SPORT_KEYS) {
+      if (w[s] != null && !(Number.isFinite(w[s]) && w[s] >= 0)) fail(`${w.weekOf}: ${s} must be hours`);
+    }
+    if (w.phase != null && typeof w.phase !== 'string') fail(`${w.weekOf}: phase must be text`);
+    if (!Array.isArray(w.sessions ?? [])) fail(`${w.weekOf}: sessions must be a list`);
+    for (const x of w.sessions ?? []) {
+      if (!SESSION_KINDS.includes(x?.sport)) fail(`${w.weekOf}: unknown sport ${x?.sport}`);
+      if (typeof x.title !== 'string' || !x.title) fail(`${w.weekOf}: session needs a title`);
+      if (!(Number.isFinite(x.minutes) && x.minutes > 0)) fail(`${w.weekOf}: ${x.title} needs minutes`);
+      if (x.day != null && !DAYS.includes(x.day)) fail(`${w.weekOf}: day must be one of ${DAYS.join(', ')}`);
+      if (x.detail != null && typeof x.detail !== 'string') fail(`${w.weekOf}: detail must be text`);
+    }
+    return w;
+  });
+  return { rampStart, planStart: raw.planStart, weeks };
+}
 
 export function classify(type = '') {
   const t = type.toLowerCase();
@@ -25,7 +70,20 @@ export function classify(type = '') {
   return null;
 }
 
+export function supportKind(type = '') {
+  const t = type.toLowerCase();
+  if (t.includes('strength')) return 'strength';
+  if (/climb|boulder/.test(t)) return 'climbing';
+  return 'other';
+}
+
+const kindOf = (a) => classify(a.type) ?? supportKind(a.type);
+
 export function phase(w) {
+  const monday = mondayAt(w);
+  const custom = weekPlan(monday)?.phase;
+  if (custom) return custom;
+  if (monday < mondayOf(activePlan.planStart)) return 'Ramp-up';
   if (w <= 1) return 'Taper';
   if (w <= 5) return 'Peak';
   if (w <= 16) return 'Build';
@@ -34,24 +92,42 @@ export function phase(w) {
 }
 
 export function planHours(sport, w) {
+  const custom = weekPlan(mondayAt(w));
+  if (custom?.[sport] != null) return custom[sport];
+  if (custom?.sessions?.length) {
+    return custom.sessions.filter((x) => x.sport === sport).reduce((n, x) => n + x.minutes, 0) / 60;
+  }
   const { start, peak } = SPORTS[sport];
   if (w < 0) return 0;
   if (w === 0) return peak * 0.35;
   if (w === 1) return peak * 0.6;
   if (w === 2) return peak * 0.85;
-  const total = weeksOut(PLAN_START);
+  const total = Math.max(4, weeksOut(mondayOf(activePlan.planStart)));
   const progress = Math.min(1, Math.max(0, (total - w) / (total - 3)));
   const hours = start + (peak - start) * progress;
   return w % 4 === 0 ? hours * 0.7 : hours; // every 4th week is a recovery week
 }
 
+export function peakHours(sport) {
+  let peak = 0;
+  for (let w = 0; w <= weeksOut(mondayOf(activePlan.planStart)); w++) peak = Math.max(peak, planHours(sport, w));
+  return peak || SPORTS[sport].peak;
+}
+
 export function weeklyTotals(activities) {
   const weeks = {};
   for (const a of activities) {
-    const sport = classify(a.type);
-    if (!sport || !a.startTimeLocal) continue;
+    if (!a.startTimeLocal) continue;
     const monday = mondayOf(a.startTimeLocal.slice(0, 10));
-    weeks[monday] ??= Object.fromEntries(SPORT_KEYS.map((s) => [s, { hours: 0, km: 0, load: 0, hardSec: 0, hrSec: 0 }]));
+    weeks[monday] ??= {
+      ...Object.fromEntries(SPORT_KEYS.map((s) => [s, { hours: 0, km: 0, load: 0, hardSec: 0, hrSec: 0 }])),
+      support: { strength: 0, climbing: 0, other: 0 },
+    };
+    const sport = classify(a.type);
+    if (!sport) {
+      weeks[monday].support[supportKind(a.type)] += (a.duration ?? 0) / 3600;
+      continue;
+    }
     const w = weeks[monday][sport];
     w.hours += (a.duration ?? 0) / 3600;
     w.km += (a.distance ?? 0) / 1000;
@@ -64,17 +140,25 @@ export function weeklyTotals(activities) {
 
 export const hardPct = (x) => (x?.hrSec ? Math.round((100 * x.hardSec) / x.hrSec) : null);
 
-function recentAverages(totals, monday) {
+function recentAverages(totals, monday, planOnly = false) {
+  const planMonday = mondayOf(activePlan.planStart);
+  const weeks = [1, 2, 3, 4].map((i) => addDays(monday, -7 * i)).filter((wk) => !planOnly || wk >= planMonday);
   const out = {};
   for (const s of SPORT_KEYS) {
-    let actual = 0;
-    let plan = 0;
-    for (let i = 1; i <= 4; i++) {
-      const wk = addDays(monday, -7 * i);
-      actual += totals[wk]?.[s].hours ?? 0;
-      plan += planHours(s, weeksOut(wk));
-    }
-    out[s] = { actual: actual / 4, plan: plan / 4 };
+    const actual = weeks.reduce((n, wk) => n + (totals[wk]?.[s].hours ?? 0), 0);
+    const plan = weeks.reduce((n, wk) => n + planHours(s, weeksOut(wk)), 0);
+    out[s] = { actual: actual / (weeks.length || 1), plan: plan / (weeks.length || 1) };
+  }
+  return out;
+}
+
+export function supportSummary(activities, today) {
+  const totals = weeklyTotals(activities);
+  const monday = mondayOf(today);
+  const out = { strength: 0, climbing: 0, other: 0 };
+  for (let i = 1; i <= 4; i++) {
+    const wk = totals[addDays(monday, -7 * i)]?.support;
+    if (wk) for (const k of Object.keys(out)) out[k] += wk[k] / 4;
   }
   return out;
 }
@@ -82,20 +166,22 @@ function recentAverages(totals, monday) {
 export function progress(activities, today) {
   const days = daysToRace(today);
   const totals = weeklyTotals(activities);
-  const recent = recentAverages(totals, mondayOf(today));
-  const sports = SPORT_KEYS.map((s) => ({
-    sport: s,
-    ...recent[s],
-    readiness: Math.min(1, recent[s].actual / SPORTS[s].peak),
-  }));
-  const actual = sports.reduce((n, s) => n + s.actual, 0);
-  const plan = sports.reduce((n, s) => n + s.plan, 0);
+  const monday = mondayOf(today);
+  const recent = recentAverages(totals, monday);
+  const onPlan = recentAverages(totals, monday, true);
+  const sports = SPORT_KEYS.map((s) => {
+    const peak = peakHours(s);
+    return { sport: s, ...recent[s], peak, readiness: Math.min(1, recent[s].actual / peak) };
+  });
+  const actual = SPORT_KEYS.reduce((n, s) => n + onPlan[s].actual, 0);
+  const plan = SPORT_KEYS.reduce((n, s) => n + onPlan[s].plan, 0);
   const readiness = Math.round((100 * sports.reduce((n, s) => n + s.readiness, 0)) / sports.length);
   const ratio = plan ? actual / plan : 0;
-  const weakest = sports.reduce((a, b) => (a.actual / a.plan <= b.actual / b.plan ? a : b)).sport;
+  const share = (s) => (onPlan[s].plan ? onPlan[s].actual / onPlan[s].plan : Infinity);
+  const weakest = SPORT_KEYS.reduce((a, b) => (share(a) <= share(b) ? a : b));
 
   const weekHours = (i) => {
-    const wk = totals[addDays(mondayOf(today), -7 * i)];
+    const wk = totals[addDays(monday, -7 * i)];
     return wk ? SPORT_KEYS.reduce((n, s) => n + wk[s].hours, 0) : 0;
   };
   const priorAvg = (weekHours(2) + weekHours(3) + weekHours(4)) / 3;
@@ -104,12 +190,13 @@ export function progress(activities, today) {
 
   let status;
   if (days < 0) status = 'done';
+  else if (today < activePlan.planStart) status = 'ramp';
   else if (actual === 0) status = 'start';
   else if (spiked) status = 'fast';
   else if (ratio >= 0.85) status = 'on-track';
   else if (ratio >= 0.6) status = 'close';
   else status = 'behind';
-  return { status, days, readiness, ratio, weakest, sports, phase: phase(weeksOut(mondayOf(today))) };
+  return { status, days, readiness, ratio, weakest, sports, phase: phase(weeksOut(monday)) };
 }
 
 export function needsRecovery(recovery) {
@@ -139,6 +226,24 @@ function effort(ph, isLong, sport, hadHard, tired, mins) {
   return sport === 'swim' ? 'Drills first, then relaxed aerobic sets.' : 'Easy Zone 2.';
 }
 
+// A written plan wins over generated advice. Each logged activity checks off one planned session of that sport.
+function plannedSessions(week, thisWeek, tired) {
+  const logged = {};
+  for (const a of thisWeek) logged[kindOf(a)] = (logged[kindOf(a)] ?? 0) + 1;
+  const pending = [...week.sessions]
+    .sort((a, b) => DAYS.indexOf(a.day) - DAYS.indexOf(b.day))
+    .filter((x) => {
+      if (!logged[x.sport]) return true;
+      logged[x.sport] -= 1;
+      return false;
+    })
+    .map((x) => ({ sport: x.sport, title: x.day ? `${x.day}: ${x.title}` : x.title, minutes: x.minutes, detail: x.detail ?? '' }));
+  const out = tired ? [{ sport: null, title: 'Prioritize recovery today', minutes: 0, detail: `${tired} Consider moving or shortening your next session.` }] : [];
+  out.push(...pending);
+  if (!pending.length) out.push({ sport: null, title: 'Week complete', minutes: 0, detail: 'You finished this week’s planned sessions.' });
+  return out.slice(0, 3);
+}
+
 export function suggestions(activities, today, recovery) {
   const days = daysToRace(today);
   if (days < 0) return [{ sport: null, title: 'Race complete', minutes: 0, detail: 'Take time to recover before picking the next goal.' }];
@@ -151,6 +256,8 @@ export function suggestions(activities, today, recovery) {
   const recent = recentAverages(totals, monday);
   const thisWeek = activities.filter((a) => a.startTimeLocal && mondayOf(a.startTimeLocal.slice(0, 10)) === monday);
   const tired = needsRecovery(recovery);
+  const written = weekPlan(monday);
+  if (written?.sessions?.length) return plannedSessions(written, thisWeek, tired);
 
   const rows = SPORT_KEYS.map((s) => {
     // Cap the ramp so a missed block is not repaid with a sudden jump in volume.

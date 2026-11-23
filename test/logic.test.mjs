@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, mondayOf, weeksOut, planHours, weeklyTotals, progress, suggestions, needsRecovery, SPORTS } from '../docs/logic.js';
+import { classify, supportKind, mondayOf, weeksOut, planHours, peakHours, weeklyTotals, progress, suggestions, supportSummary, needsRecovery, parsePlan, setPlan, phase, DEFAULT_PLAN, SPORTS } from '../docs/logic.js';
 import worker, { sanitizeActivities } from '../worker/index.js';
 
 test('worker exchanges the key, returns clean data, and hides failures', async () => {
@@ -73,7 +73,66 @@ test('weekly totals bucket by Monday and track hard time', () => {
   assert.equal(t['2026-11-23'].run.hrSec, 3600);
 });
 
+test('ramp-up never reports behind, and old training does not count against the plan', () => {
+  const p = progress([session('running', '2026-11-16', 0.2)], '2026-11-23');
+  assert.equal(p.status, 'ramp');
+  assert.equal(p.phase, 'Ramp-up');
+  assert.equal(progress([session('running', '2026-11-30', 0.2)], '2026-12-07').status, 'start');
+});
+
+test('strength, climbing, and other training stay out of swim, bike, and run totals', () => {
+  assert.equal(supportKind('strength_training'), 'strength');
+  assert.equal(supportKind('indoor_climbing'), 'climbing');
+  assert.equal(supportKind('indoor_cardio'), 'other');
+  const a = [session('strength_training', '2026-11-16', 1), session('indoor_climbing', '2026-11-17', 2)];
+  const wk = weeklyTotals(a)['2026-11-16'];
+  assert.deepEqual(wk.support, { strength: 1, climbing: 2, other: 0 });
+  assert.equal(wk.run.hours + wk.bike.hours + wk.swim.hours, 0);
+  assert.deepEqual(supportSummary(a, '2026-11-23'), { strength: 0.25, climbing: 0.5, other: 0 });
+});
+
+test('plan file validation rejects bad input with a clear message', () => {
+  const base = { planStart: '2026-12-07', weeks: [] };
+  assert.equal(parsePlan(base).rampStart, '2026-12-07');
+  assert.throws(() => parsePlan({ weeks: [] }), /planStart/);
+  assert.throws(() => parsePlan({ planStart: '2026-02-31' }), /planStart/);
+  assert.throws(() => parsePlan({ ...base, rampStart: '2027-01-01' }), /rampStart/);
+  assert.throws(() => parsePlan({ ...base, weeks: [{ weekOf: '2026-12-08' }] }), /Monday/);
+  assert.throws(() => parsePlan({ ...base, weeks: [{ weekOf: '2026-12-07' }, { weekOf: '2026-12-07' }] }), /twice/);
+  assert.throws(() => parsePlan({ ...base, weeks: [{ weekOf: '2026-12-07', run: -1 }] }), /hours/);
+  assert.throws(() => parsePlan({ ...base, weeks: [{ weekOf: '2026-12-07', sessions: [{ sport: 'golf', title: 'x', minutes: 10 }] }] }), /sport/);
+  assert.throws(() => parsePlan({ ...base, weeks: [{ weekOf: '2026-12-07', sessions: [{ sport: 'run', title: 'x' }] }] }), /minutes/);
+});
+
+test('a written plan overrides targets, phase, and next steps', () => {
+  setPlan(parsePlan({
+    rampStart: '2026-11-23', planStart: '2026-12-07',
+    weeks: [{
+      weekOf: '2026-12-07', phase: 'Custom', bike: 9,
+      sessions: [
+        { day: 'Thu', sport: 'run', title: 'Tempo', minutes: 40 },
+        { day: 'Tue', sport: 'swim', title: 'Drills', minutes: 30 },
+        { day: 'Wed', sport: 'strength', title: 'Gym', minutes: 45 },
+      ],
+    }],
+  }));
+  try {
+    const w = weeksOut('2026-12-07');
+    assert.equal(planHours('bike', w), 9);
+    assert.equal(planHours('swim', w), 0.5);
+    assert.equal(phase(w), 'Custom');
+    assert.equal(peakHours('bike') >= 9, true);
+    assert.deepEqual(suggestions([], '2026-12-07', null).map((s) => s.title), ['Tue: Drills', 'Wed: Gym', 'Thu: Tempo']);
+    const afterSwim = suggestions([session('lap_swimming', '2026-12-08', 0.5)], '2026-12-09', null);
+    assert.deepEqual(afterSwim.map((s) => s.title), ['Wed: Gym', 'Thu: Tempo']);
+    assert.equal(planHours('run', weeksOut('2026-12-14')) > 0, true, 'undefined weeks use the default ramp');
+  } finally {
+    setPlan(DEFAULT_PLAN);
+  }
+});
+
 test('progress verdicts', () => {
+  setPlan({ rampStart: '2026-10-26', planStart: '2026-10-26', weeks: [] });
   assert.equal(progress([], '2026-11-23').status, 'start');
   const weeks = ['2026-10-26', '2026-11-02', '2026-11-09', '2026-11-16'];
   const onPlan = weeks.flatMap((d) => [session('lap_swimming', d, 1), session('cycling', d, 2), session('running', d, 1.25)]);
@@ -84,6 +143,7 @@ test('progress verdicts', () => {
   assert.equal(progress(fitAndSteady, '2026-11-23').status, 'on-track');
   const spike = weeks.map((d, i) => session('cycling', d, i === 3 ? 8 : 4));
   assert.equal(progress(spike, '2026-11-23').status, 'fast');
+  setPlan(DEFAULT_PLAN);
 });
 
 test('fueling advice only appears on long bike and run sessions', () => {

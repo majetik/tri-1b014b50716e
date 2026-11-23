@@ -1,7 +1,6 @@
 const BASE = 'https://personal.connectapi.garmin.com';
 const TOKEN_PATH = '/personalapitoken-service/personal-api/personal-api-key/token';
 const CACHE_SECONDS = 120;
-const HISTORY_DAYS = 400;
 const PAGE_SIZE = 100;
 const MAX_PAGES = 20; // Cloudflare's free plan allows 50 outbound requests per invocation
 
@@ -72,11 +71,11 @@ async function garmin(env, path, params = {}, retried = false) {
   return text ? JSON.parse(text) : null;
 }
 
-async function allActivities(env, startDate, endDate) {
+async function allActivities(env, endDate) {
   const out = [];
   for (let page = 0; page < MAX_PAGES; page++) {
     const batch = await garmin(env, '/activitylist-service/activities/search/activities', {
-      start: page * PAGE_SIZE, limit: PAGE_SIZE, startDate, endDate, excludeChildren: false,
+      start: page * PAGE_SIZE, limit: PAGE_SIZE, endDate, excludeChildren: false,
     }) ?? [];
     out.push(...batch);
     if (batch.length < PAGE_SIZE) return { raw: out, truncated: false };
@@ -90,7 +89,7 @@ async function buildPayload(env) {
   const now = Date.now();
   const today = isoDay(now + 86400_000); // UTC can trail the athlete's local date
   const recent = isoDay(now - 14 * 86400_000);
-  const { raw, truncated } = await allActivities(env, isoDay(now - HISTORY_DAYS * 86400_000), today);
+  const { raw, truncated } = await allActivities(env, today);
   // Recovery is optional: a failure here must not hide training data.
   const [hrv, sleep] = await Promise.allSettled([
     garmin(env, `/hrv-service/hrv/daily/${recent}/${today}`),

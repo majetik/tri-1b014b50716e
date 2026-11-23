@@ -11,14 +11,14 @@
 <style>
 :root {
   --bg: #f6f6f3; --surface: #fcfcfb; --ink: #1b1c1a; --ink-2: #565852; --ink-3: #6f716a; --line: #e3e3de;
-  --swim: #2474C9; --bike: #E8590C; --run: #0E9F8E;
+  --swim: #2474C9; --bike: #E8590C; --run: #0E9F8E; --support: #c9cac4;
   --good: #16723c; --warn: #8a5a00; --bad: #b3261e;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #111110; --surface: #1a1a19; --ink: #f0f0ec; --ink-2: #b9bab3; --ink-3: #94958e; --line: #2e2e2b;
-    --swim: #4C96E3; --bike: #DE6A1A; --run: #18A78E;
+    --swim: #4C96E3; --bike: #DE6A1A; --run: #18A78E; --support: #474843;
     --good: #6fd08f; --warn: #eebd5c; --bad: #ff8d84;
     color-scheme: dark;
   }
@@ -47,6 +47,7 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--swim); ou
 .bar-label strong { color: var(--ink); font-weight: 600; }
 .track { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; margin-top: 3px; }
 .track i { display: block; height: 100%; border-radius: 4px; }
+.support-line { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--ink-3); font-size: 13px; }
 .next { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 10px; }
 .next li { display: grid; grid-template-columns: 4px 1fr auto; gap: 2px 10px; padding-top: 10px; border-top: 1px solid var(--line); }
 .next li:first-child { border-top: 0; padding-top: 0; }
@@ -91,6 +92,7 @@ footer { color: var(--ink-3); font-size: 12px; text-align: center; padding-top: 
       <div><b id="phase">–</b><span>training phase</span></div>
     </div>
     <div class="bars" id="bars"></div>
+    <p class="support-line" id="support"></p>
   </section>
 
   <section class="card">
@@ -100,7 +102,7 @@ footer { color: var(--ink-3); font-size: 12px; text-align: center; padding-top: 
 
   <section class="card">
     <div class="chips" id="chips" role="group" aria-label="Choose sports to show"></div>
-    <div class="chart-head" style="margin-top:12px"><h2>Weekly volume</h2><span>hours · dashed = plan</span></div>
+    <div class="chart-head" style="margin-top:12px"><h2>Weekly volume</h2><span>faded = history · dashed = plan · gray = support</span></div>
     <div class="chart"><canvas id="volume" role="img" aria-label="Weekly training hours by sport compared with plan"></canvas></div>
     <div class="chart-head" style="margin-top:14px"><h2>Intensity</h2><span>% of time in HR Zones 4–5</span></div>
     <div class="chart short"><canvas id="intensity" role="img" aria-label="Weekly share of hard training by sport"></canvas></div>

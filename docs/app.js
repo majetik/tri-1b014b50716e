@@ -1,14 +1,14 @@
 import { API_URL } from './config.js';
 import { demoData } from './demo.js';
-import { SPORTS, PLAN_START, RACE, addDays, mondayOf, weeksOut, planHours, weeklyTotals, hardPct, progress, suggestions } from './logic.js';
+import { SPORTS, SUPPORT, DEFAULT_PLAN, RACE, addDays, mondayOf, weeksOut, planHours, weeklyTotals, hardPct, progress, suggestions, supportSummary, getPlan, setPlan, parsePlan } from './logic.js';
 
 const $ = (id) => document.getElementById(id);
 const KEYS = Object.keys(SPORTS);
 const STORE = 'tri-tracker-data';
 const REFRESH_AFTER_MS = 120000;
-const HISTORY_WEEKS = 16;
 
 const shown = new Set(KEYS);
+let showSupport = true;
 let data = null;
 let lastFetch = 0;
 let charts = {};
@@ -27,7 +27,8 @@ const el = (tag, props = {}, ...kids) => {
 };
 
 const VERDICTS = {
-  start: ['Ready to start', 'No training in the last 4 weeks. Begin with the sessions below.', '●'],
+  ramp: ['Ramping up', 'Build the habit before the real plan begins. Past training stays below for reference.', '●'],
+  start: ['Plan started', 'Begin with the sessions below.', '●'],
   'on-track': ['On track', 'Your last 4 weeks meet or beat the plan.', '✓'],
   close: ['Slightly behind', 'You are close. A few consistent weeks will catch you up.', '!'],
   behind: ['Behind plan', 'There is time to recover this. Build back gradually.', '▼'],
@@ -40,7 +41,8 @@ function renderSummary(today) {
   const [title, why, icon] = VERDICTS[p.status];
   const tag = $('verdict-tag');
   tag.className = `verdict-row ${p.status}`;
-  tag.textContent = `${icon} ${p.status === 'start' ? 'Week 1' : `${Math.round(p.ratio * 100)}% of planned hours`}`;
+  const tagText = { ramp: `Plan starts ${shortDate(getPlan().planStart)}`, start: 'Week 1' }[p.status] ?? `${Math.round(p.ratio * 100)}% of planned hours`;
+  tag.textContent = `${icon} ${tagText}`;
   $('verdict').textContent = title;
   const focus = ['close', 'behind'].includes(p.status) ? ` Focus on ${SPORTS[p.weakest].label.toLowerCase()}.` : '';
   $('why').textContent = why + focus;
@@ -52,15 +54,19 @@ function renderSummary(today) {
     fill.style.cssText = `width:${Math.round(s.readiness * 100)}%;background:var(--${s.sport})`;
     return el('div', {},
       el('div', { className: 'bar-label' }, el('strong', { textContent: SPORTS[s.sport].label }),
-        el('span', { textContent: `${hm(s.actual)} / ${hm(SPORTS[s.sport].peak)} peak per week` })),
+        el('span', { textContent: `${hm(s.actual)} / ${hm(s.peak)} peak per week` })),
       el('div', { className: 'track' }, fill));
   }));
+  const support = supportSummary(data.activities, today);
+  const parts = Object.keys(SUPPORT).filter((k) => support[k] > 0).map((k) => `${SUPPORT[k]} ${hm(support[k])}`);
+  $('support').textContent = parts.length ? `Supporting, weekly average: ${parts.join(' · ')}` : '';
+  $('support').hidden = !parts.length;
 }
 
 function renderNext(today) {
   $('next').replaceChildren(...suggestions(data.activities, today, data.recovery).map((s) => {
     const tick = el('span', { className: 'tick' });
-    if (s.sport) tick.style.background = `var(--${s.sport})`;
+    if (s.sport) tick.style.background = SPORTS[s.sport] ? `var(--${s.sport})` : 'var(--support)';
     return el('li', {}, tick, el('b', { textContent: s.title }),
       el('span', { className: 'mins', textContent: s.minutes ? `${s.minutes} min` : '' }),
       el('p', { textContent: s.detail }));
@@ -83,14 +89,22 @@ function renderChips() {
     };
     return b;
   };
-  $('chips').replaceChildren(chip(null, 'All'), ...KEYS.map((k) => chip(k, SPORTS[k].label)));
+  const support = el('button', { type: 'button', className: 'chip', textContent: 'Support' });
+  support.setAttribute('aria-pressed', showSupport);
+  support.setAttribute('aria-label', 'Strength, climbing, and other supporting training');
+  support.style.setProperty('--c', 'var(--ink-3)');
+  support.onclick = () => {
+    showSupport = !showSupport;
+    renderChips();
+    renderCharts();
+  };
+  $('chips').replaceChildren(chip(null, 'All'), ...KEYS.map((k) => chip(k, SPORTS[k].label)), support);
 }
 
-function timeline(totals, today) {
-  const first = Object.keys(totals).sort()[0] ?? PLAN_START;
-  const floor = addDays(mondayOf(today), -7 * HISTORY_WEEKS);
-  let wk = first < floor ? floor : first;
-  if (wk > PLAN_START) wk = PLAN_START;
+function timeline(totals) {
+  const start = mondayOf(getPlan().rampStart);
+  const first = Object.keys(totals).sort()[0] ?? start;
+  let wk = first < start ? first : start;
   const weeks = [];
   for (; wk <= mondayOf(RACE); wk = addDays(wk, 7)) weeks.push(wk);
   return weeks;
@@ -109,6 +123,7 @@ function chartOptions(unit) {
         callbacks: {
           title: (items) => `Week of ${shortDate(items[0].label)}`,
           label: (i) => `${i.dataset.label}: ${unit === 'h' ? hm(i.parsed.y) : `${i.parsed.y}%`}`,
+          afterLabel: (i) => i.dataset.breakdown?.[i.dataIndex] ?? '',
         },
       },
     },
@@ -123,19 +138,31 @@ function renderCharts() {
   const today = localToday();
   const current = mondayOf(today);
   const totals = weeklyTotals(data.activities);
-  const weeks = timeline(totals, today);
+  const weeks = timeline(totals);
+  const { planStart, rampStart } = getPlan();
   const actual = (fn) => weeks.map((w) => (w <= current ? fn(w) : null));
   const line = (s, label, values, extra = {}) => ({
     label, data: values, borderColor: css(`--${s}`), backgroundColor: css(`--${s}`),
-    borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, tension: 0.25, ...extra,
+    borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, tension: 0.25,
+    // Training before the ramp is reference only, so it is drawn faded.
+    segment: { borderColor: (c) => (weeks[c.p1DataIndex] < mondayOf(rampStart) ? `${css(`--${s}`)}55` : undefined) },
+    ...extra,
   });
+  const supportHours = (w) => Object.values(totals[w]?.support ?? {}).reduce((a, b) => a + b, 0);
+  const supportBars = showSupport ? [{
+    type: 'bar', label: 'Supporting', order: 10, maxBarThickness: 6, borderRadius: 2,
+    backgroundColor: css('--support'),
+    data: actual((w) => +supportHours(w).toFixed(2) || null),
+    breakdown: weeks.map((w) => Object.keys(SUPPORT).filter((k) => totals[w]?.support[k] > 0)
+      .map((k) => `${SUPPORT[k]} ${hm(totals[w].support[k])}`).join(', ')),
+  }] : [];
 
-  const volume = KEYS.filter((s) => shown.has(s)).flatMap((s) => [
+  const volume = [...KEYS.filter((s) => shown.has(s)).flatMap((s) => [
     // An empty current week is unfinished, not a real drop to zero.
     line(s, SPORTS[s].label, actual((w) => (w === current && !totals[w]?.[s].hours ? null : +(totals[w]?.[s].hours ?? 0).toFixed(2)))),
-    line(s, `${SPORTS[s].label} plan`, weeks.map((w) => (w < PLAN_START ? null : +planHours(s, weeksOut(w)).toFixed(2))),
-      { borderDash: [4, 4], borderWidth: 1.5, tension: 0 }),
-  ]);
+    line(s, `${SPORTS[s].label} plan`, weeks.map((w) => (w < mondayOf(planStart) ? null : +planHours(s, weeksOut(w)).toFixed(2))),
+      { borderDash: [4, 4], borderWidth: 1.5, tension: 0, segment: {} }),
+  ]), ...supportBars];
   const intensity = KEYS.filter((s) => shown.has(s)).map((s) => line(s, SPORTS[s].label,
     actual((w) => hardPct(totals[w]?.[s])), { spanGaps: true }));
 
@@ -149,11 +176,11 @@ function renderCharts() {
   $('table').replaceChildren(
     el('thead', {}, el('tr', {}, el('th', { textContent: 'Week' }), ...cols.flatMap((s) => [
       el('th', { textContent: `${SPORTS[s].label} h` }), el('th', { textContent: 'Hard' }),
-    ]))),
+    ]), el('th', { textContent: 'Support h' }))),
     el('tbody', {}, ...recent.map((w) => el('tr', {}, el('td', { textContent: shortDate(w) }), ...cols.flatMap((s) => {
       const pct = hardPct(totals[w]?.[s]);
       return [el('td', { textContent: (totals[w]?.[s].hours ?? 0).toFixed(1) }), el('td', { textContent: pct == null ? '–' : `${pct}%` })];
-    })))),
+    }), el('td', { textContent: supportHours(w).toFixed(1) })))),
   );
 }
 
@@ -172,7 +199,20 @@ function banner(text) {
 
 const syncedLabel = (iso) => new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
+async function loadPlan() {
+  try {
+    const res = await fetch('plan.json', { cache: 'no-cache' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    setPlan(parsePlan(await res.json()));
+    return '';
+  } catch (err) {
+    setPlan(DEFAULT_PLAN);
+    return `Plan file problem: ${err.message}. Using the default plan.`;
+  }
+}
+
 async function load() {
+  const planIssue = await loadPlan();
   if (!API_URL || new URLSearchParams(location.search).has('demo')) {
     data = demoData(localToday());
     banner('Sample data. Connect your Garmin Worker to see your real training.');
@@ -188,7 +228,7 @@ async function load() {
     if (!res.ok) throw new Error(res.status);
     data = await res.json();
     try { localStorage.setItem(STORE, JSON.stringify(data)); } catch { /* storage is only an offline convenience */ }
-    banner(data.truncated ? 'Only your most recent activities were loaded.' : '');
+    banner([planIssue, data.truncated ? 'Only your most recent activities were loaded.' : ''].filter(Boolean).join(' '));
     $('race-date').textContent = `October 17, 2027 · synced ${syncedLabel(data.syncedAt)}`;
     render();
   } catch {

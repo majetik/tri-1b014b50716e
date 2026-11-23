@@ -34,7 +34,7 @@ The Worker's `/data` response and the site are public. The Worker publishes an a
 
 ## Change the plan
 
-Edit weekly hours in `SPORTS` at the top of `docs/logic.js`.
+Replace `docs/plan.json`. The format is in [PLAN_FORMAT.md](PLAN_FORMAT.md). No code change is needed.
 
 ## Test
 
