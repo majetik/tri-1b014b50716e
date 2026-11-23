@@ -120,7 +120,8 @@ export function needsRecovery(recovery) {
   };
   const hours = avg('hours');
   const score = avg('score');
-  const hrv = (recovery?.hrv ?? []).filter((h) => h.status).at(-1)?.status ?? '';
+  const hrv = (recovery?.hrv ?? []).filter((h) => h.status)
+    .sort((a, b) => (a.date ?? '').localeCompare(b.date ?? '')).at(-1)?.status ?? '';
   if (hours != null && hours < 6) return 'You averaged under 6 hours of sleep over the last 3 nights.';
   if (score != null && score < 60) return 'Your recent sleep scores are low.';
   if (/LOW|POOR|UNBALANCED/i.test(hrv)) return 'Your HRV is outside your normal range.';
