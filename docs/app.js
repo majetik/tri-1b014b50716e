@@ -9,6 +9,7 @@ const REFRESH_AFTER_MS = 120000;
 
 const shown = new Set(KEYS);
 let showSupport = true;
+let showAllHistory = false;
 let data = null;
 let lastFetch = 0;
 let charts = {};
@@ -99,12 +100,24 @@ function renderChips() {
     renderCharts();
   };
   $('chips').replaceChildren(chip(null, 'All'), ...KEYS.map((k) => chip(k, SPORTS[k].label)), support);
+  $('range').replaceChildren(...[[false, 'Last 6 months + plan'], [true, 'All history']].map(([all, label]) => {
+    const b = el('button', { type: 'button', className: 'chip all', textContent: label });
+    b.setAttribute('aria-pressed', showAllHistory === all);
+    b.onclick = () => {
+      showAllHistory = all;
+      renderChips();
+      renderCharts();
+    };
+    return b;
+  }));
 }
 
 function timeline(totals) {
   const start = mondayOf(getPlan().rampStart);
   const first = Object.keys(totals).sort()[0] ?? start;
+  const floor = addDays(start, -7 * 26);
   let wk = first < start ? first : start;
+  if (!showAllHistory && wk < floor) wk = floor;
   const weeks = [];
   for (; wk <= mondayOf(RACE); wk = addDays(wk, 7)) weeks.push(wk);
   return weeks;
